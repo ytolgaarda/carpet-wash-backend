@@ -7,6 +7,7 @@ const userModel = new mongoose.Schema({
   email: {type: String, required: true, unique: true},
   password: {type: String, required: true},
   phone: {type: String},
+  refreshToken: {type: String},
   addressList: [{
     label: String,
     fullAddress: String,
@@ -19,9 +20,9 @@ const userModel = new mongoose.Schema({
   createdAt: {type: Date, default: Date.now}
 });
 
-// Şifre hashleme middleware
+// Şifre hashleme (kayıt sırasında otomatik çalışır)
 userModel.pre('save', async function (next) {
-  if (!this.isModified('password')) return next();
+  if (!this.isModified('password')) return next(); // şifre değişmemişse geç
 
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);

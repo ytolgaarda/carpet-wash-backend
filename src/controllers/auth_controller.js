@@ -4,12 +4,18 @@ const jwt = require('jsonwebtoken');
 
 
 
-
-const generateToken = (userId) => {
-  return jwt.sign({id: userId}, process.env.JWT_SECRET, {
-    expiresIn: '7d',
+const generateTokens = (userId) => {
+  const accessToken = jwt.sign({id: userId}, process.env.JWT_SECRET, {
+    expiresIn: '15m', // kısa süreli
   });
+
+  const refreshToken = jwt.sign({id: userId}, process.env.JWT_REFRESH_SECRET, {
+    expiresIn: '7d', // uzun süreli
+  });
+
+  return {accessToken, refreshToken};
 };
+
 
 
 // Register - Kayıt İşlemi
@@ -20,7 +26,6 @@ exports.register = async (req, res) => {
     const userExists = await User.findOne({email});
     if (userExists) return res.status(400).json({message: 'Email zaten kayıtlı'});
 
-
     const user = new User({
       name,
       email,
@@ -28,25 +33,27 @@ exports.register = async (req, res) => {
       phone,
       role
     });
+
+
+    const {accessToken, refreshToken} = generateTokens(user._id);
+    user.refreshToken = refreshToken;
     await user.save();
 
-    const token = generateToken(user._id);
-
-    res.status(201).json({
+    res.json({
       _id: user._id,
       name: user.name,
       email: user.email,
-      phone: user.phone,
       role: user.role,
-      token,
+      token: accessToken,
+      refreshToken,
     });
+
   } catch (error) {
     res.status(500).json({message: error.message});
   }
 };
 
-
-// Login - Giriş İşlemi
+// ✅ Kullanıcı Giriş
 exports.login = async (req, res) => {
   const {email, password} = req.body;
 
@@ -57,7 +64,10 @@ exports.login = async (req, res) => {
     const isMatch = await user.matchPassword(password);
     if (!isMatch) return res.status(400).json({message: 'Geçersiz email veya şifre'});
 
-    const token = generateToken(user._id);
+    const {accessToken, refreshToken} = generateTokens(user._id);
+    user.refreshToken = refreshToken;
+
+    await user.save();
 
     res.json({
       _id: user._id,
@@ -65,10 +75,49 @@ exports.login = async (req, res) => {
       email: user.email,
       phone: user.phone,
       role: user.role,
-      token,
+      token: accessToken,
+      refreshToken,
     });
   } catch (error) {
     res.status(500).json({message: error.message});
   }
 };
 
+// Refresh Token Endpoint
+exports.refreshToken = async (req, res) => {
+  const {refreshToken} = req.body;
+
+  if (!refreshToken) {
+    return res.status(401).json({message: 'Refresh token gerekli'});
+  }
+
+  try {
+    // Refresh token'ı doğrula
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+
+    // Kullanıcıyı bul
+    const user = await User.findById(decoded.id);
+    if (!user) {
+      return res.status(404).json({message: 'Kullanıcı bulunamadı'});
+    }
+
+    // Refresh token eşleşiyor mu kontrolü
+    if (user.refreshToken !== refreshToken) {
+      return res.status(403).json({message: 'Geçersiz refresh token'});
+    }
+
+    // Yeni tokenlar üret
+    const {accessToken, refreshToken: newRefreshToken} = generateTokens(user._id);
+
+    // Kullanıcı refresh token'ını güncelle
+    user.refreshToken = newRefreshToken;
+    await user.save();
+
+    res.json({
+      accessToken,
+      refreshToken: newRefreshToken,
+    });
+  } catch (error) {
+    res.status(403).json({message: 'Token süresi dolmuş veya geçersiz'});
+  }
+};
